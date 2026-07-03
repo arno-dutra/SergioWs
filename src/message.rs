@@ -26,8 +26,8 @@ impl From<MessageBuffer> for Message {
 impl MessageBuffer {
     pub(crate) fn with_capacity(op_code: OpCode, capacity: usize) -> Self {
         match op_code {
-            OpCode::Text => MessageBuffer::Text(Vec::with_capacity(capacity)),
-            OpCode::Binary => MessageBuffer::Binary(Vec::with_capacity(capacity)),
+            OpCode::Text => MessageBuffer::Text(vec![0; capacity]),
+            OpCode::Binary => MessageBuffer::Binary(vec![0; capacity]),
             _ => panic!("Invalid op code for message buffer"),
         }
     }

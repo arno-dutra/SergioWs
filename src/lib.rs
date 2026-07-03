@@ -271,15 +271,15 @@ impl<'f, S> WebSocketRead<S> {
     /// # Arguments
     ///
     /// * `control_frame_handler`: Closure that receives the control frames.
-    pub async fn read_message<R, E>( 
-                                     &mut self,
-                                     control_frame_handler: &mut impl FnMut(ControlFrame) -> R,
+    pub async fn read_message<R, E>(
+        &mut self,
+        control_frame_handler: &mut impl FnMut(ControlFrame) -> R,
     ) -> Result<Message, WebSocketError>
     where
         S: AsyncRead + Unpin,
         E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
         R: Future<Output=Result<(), E>>,
-    { 
+    {
         let mut message_buffer = None;
         loop {
             let (res, control_frame) =
@@ -551,7 +551,7 @@ impl ReadHalf {
 
         // self.buffer.advance(2);
         // while self.buffer.remaining() < extra + masked as usize * 4 {
-        //     eof!(stream.read_buf(&mut self.buffer).await?); 
+        //     eof!(stream.read_buf(&mut self.buffer).await?);
         // }
 
         let payload_len: usize = match extra {
@@ -618,16 +618,16 @@ impl ReadHalf {
             if let Some(current_message_buffer) = message_buffer {
                 let inner = current_message_buffer.get_inner();
                 let len = inner.len();
-                inner.reserve_exact(payload_len);
-                eof!(stream.read_exact(inner).await?);
-                let current_message_buffer_slice = &mut current_message_buffer.get_inner()[len..len + payload_len];
+                inner.resize(len + payload_len, 0);
+                let current_message_buffer_slice = &mut current_message_buffer.get_inner()[len..];
+                eof!(stream.read_exact(current_message_buffer_slice).await?);
                 Ok(Frame::new(fin, opcode, mask, Payload::BorrowedMut(current_message_buffer_slice)))
             } else {
                 let current_message_buffer = message_buffer.insert(MessageBuffer::with_capacity(opcode, payload_len));
                 let inner = current_message_buffer.get_inner();
                 let current_message_buffer_slice = &mut inner[..];
                 eof!(stream.read_exact(current_message_buffer_slice).await?);
-                Ok(Frame::new(fin, opcode, mask, Payload::BorrowedMut(current_message_buffer_slice)))
+                Ok(Frame::new(fin, opcode, mask, Payload::BorrowedMut(&mut inner[..])))
             }
         }
     }
