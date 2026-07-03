@@ -271,7 +271,7 @@ impl<'f, S> WebSocketRead<S> {
     /// # Arguments
     ///
     /// * `control_frame_handler`: Closure that receives the control frames.
-    pub async fn read_message<R, E>( // TODO: Replace this method with a `read_message(&mut self, send_fn: &mut impl FnMut(Frame<'f>) -> R) -> Result<Message, WebSocketError>`
+    pub async fn read_message<R, E>( 
                                      &mut self,
                                      control_frame_handler: &mut impl FnMut(ControlFrame) -> R,
     ) -> Result<Message, WebSocketError>
@@ -279,11 +279,11 @@ impl<'f, S> WebSocketRead<S> {
         S: AsyncRead + Unpin,
         E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
         R: Future<Output=Result<(), E>>,
-    { // TODO: Rethink the accumulation logic. Since we don't care about reading Frames in the end, but are interested in full Messages, we can use a single Vec<u8> (or BytesMut) for all the Frames to avoid copying them as did line 342 (```data.extend_from_slice(&frame.payload);```).
+    { 
         let mut message_buffer = None;
         loop {
             let (res, control_frame) =
-                self.read_half.read_frame_inner(&mut self.stream, &mut message_buffer).await; // TODO: Update the `read_frame_inner` function to use the shared buffer.
+                self.read_half.read_frame_inner(&mut self.stream, &mut message_buffer).await;
             if let Some(frame) = control_frame {
                 let res = control_frame_handler(frame).await;
                 res.map_err(|e| WebSocketError::SendError(e.into()))?;
@@ -551,7 +551,7 @@ impl ReadHalf {
 
         // self.buffer.advance(2);
         // while self.buffer.remaining() < extra + masked as usize * 4 {
-        //     eof!(stream.read_buf(&mut self.buffer).await?); // TODO: The header and the payload should be read into separate buffers. Check the WebSocket RFC to get the header size.
+        //     eof!(stream.read_buf(&mut self.buffer).await?); 
         // }
 
         let payload_len: usize = match extra {
