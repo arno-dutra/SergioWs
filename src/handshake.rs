@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use hyper::body::Incoming;
-use hyper::upgrade::Upgraded;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
@@ -22,15 +21,11 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
 use hyper_util::rt::TokioIo;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 
+use crate::WebSocketError;
 use std::future::Future;
 use std::pin::Pin;
-
-use crate::Role;
-use crate::WebSocket;
-use crate::WebSocketError;
+use tokio::net::TcpStream;
 
 /// Perform the client handshake.
 ///
@@ -82,72 +77,73 @@ use crate::WebSocketError;
 ///   }
 /// }
 /// ```
-pub async fn client<S, E, B>(
-  executor: &E,
-  request: Request<B>,
-  socket: S,
-) -> Result<(WebSocket<TokioIo<Upgraded>>, Response<Incoming>), WebSocketError>
+pub async fn client<E, B>(
+    executor: &E,
+    request: Request<B>,
+    socket: TcpStream,
+) -> Result<TcpStream, WebSocketError>
 where
-  S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-  E: hyper::rt::Executor<Pin<Box<dyn Future<Output = ()> + Send>>>,
-  B: hyper::body::Body + 'static + Send,
-  B::Data: Send,
-  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    E: hyper::rt::Executor<Pin<Box<dyn Future<Output=()> + Send>>>,
+    B: hyper::body::Body + 'static + Send,
+    B::Data: Send,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-  let (mut sender, conn) =
-    hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
-  let fut = Box::pin(async move {
-    let _ = conn.with_upgrades().await;
-  });
-  executor.execute(fut);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
+    let fut = Box::pin(async move {
+        let _ = conn.with_upgrades().await;
+    });
+    executor.execute(fut);
 
-  let mut response = sender.send_request(request).await?;
-  verify(&response)?;
+    let mut response = sender.send_request(request).await?;
+    verify(&response)?;
 
-  match hyper::upgrade::on(&mut response).await {
-    Ok(upgraded) => Ok((
-      WebSocket::after_handshake(TokioIo::new(upgraded), Role::Client),
-      response,
-    )),
-    Err(e) => Err(e.into()),
-  }
+    match hyper::upgrade::on(&mut response).await {
+        Ok(upgraded) => {
+            // Downcast the upgraded connection to TokioIo<TcpStream>
+            match upgraded.downcast::<TokioIo<TcpStream>>() {
+                Ok(tokio_io) => Ok(tokio_io.io.into_inner()),
+                Err(_) => unreachable!("Upgraded is not downcastable to TokioIo<TcpStream>. The issue comes from the implementaiton of the SergioWs::handshake::client function."),
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Generate a random key for the `Sec-WebSocket-Key` header.
 pub fn generate_key() -> String {
-  // a base64-encoded (see Section 4 of [RFC4648]) value that,
-  // when decoded, is 16 bytes in length (RFC 6455)
-  let r: [u8; 16] = rand::random();
-  STANDARD.encode(r)
+    // a base64-encoded (see Section 4 of [RFC4648]) value that,
+    // when decoded, is 16 bytes in length (RFC 6455)
+    let r: [u8; 16] = rand::random();
+    STANDARD.encode(r)
 }
 
 // https://github.com/snapview/tungstenite-rs/blob/314feea3055a93e585882fb769854a912a7e6dae/src/handshake/client.rs#L189
 fn verify(response: &Response<Incoming>) -> Result<(), WebSocketError> {
-  if response.status() != StatusCode::SWITCHING_PROTOCOLS {
-    return Err(WebSocketError::InvalidStatusCode(
-      response.status().as_u16(),
-    ));
-  }
+    if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        return Err(WebSocketError::InvalidStatusCode(
+            response.status().as_u16(),
+        ));
+    }
 
-  let headers = response.headers();
+    let headers = response.headers();
 
-  if !headers
-    .get("Upgrade")
-    .and_then(|h| h.to_str().ok())
-    .map(|h| h.eq_ignore_ascii_case("websocket"))
-    .unwrap_or(false)
-  {
-    return Err(WebSocketError::InvalidUpgradeHeader);
-  }
+    if !headers
+        .get("Upgrade")
+        .and_then(|h| h.to_str().ok())
+        .map(|h| h.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false)
+    {
+        return Err(WebSocketError::InvalidUpgradeHeader);
+    }
 
-  if !headers
-    .get("Connection")
-    .and_then(|h| h.to_str().ok())
-    .map(|h| h.eq_ignore_ascii_case("Upgrade"))
-    .unwrap_or(false)
-  {
-    return Err(WebSocketError::InvalidConnectionHeader);
-  }
+    if !headers
+        .get("Connection")
+        .and_then(|h| h.to_str().ok())
+        .map(|h| h.eq_ignore_ascii_case("Upgrade"))
+        .unwrap_or(false)
+    {
+        return Err(WebSocketError::InvalidConnectionHeader);
+    }
 
-  Ok(())
+    Ok(())
 }

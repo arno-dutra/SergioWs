@@ -162,18 +162,11 @@ mod mask;
 #[cfg(feature = "upgrade")]
 #[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
-pub mod message;
+pub mod message_in;
 pub mod controle_frame;
+pub mod message_out;
 
 use bytes::Buf;
-
-use bytes::BytesMut;
-use std::future::Future;
-
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWrite;
-use tokio::io::AsyncWriteExt;
 
 pub use crate::close::CloseCode;
 use crate::controle_frame::ControlFrame;
@@ -182,7 +175,16 @@ pub use crate::frame::Frame;
 pub use crate::frame::OpCode;
 pub use crate::frame::Payload;
 pub use crate::mask::unmask;
-use crate::message::{Message, MessageBuffer};
+use crate::message_in::{Message, MessageBuffer};
+use crate::message_out::MessageOut;
+use bytes::BytesMut;
+use std::future::Future;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWrite;
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Role {
@@ -207,25 +209,22 @@ pub(crate) struct ReadHalf {
     buffer: BytesMut,
 }
 
-pub struct WebSocketRead<S> {
-    stream: S,
+pub struct WebSocketRead {
+    stream: OwnedReadHalf,
     read_half: ReadHalf,
 }
 
-pub struct WebSocketWrite<S> {
-    stream: S,
+pub struct WebSocketWrite {
+    stream: OwnedWriteHalf,
     write_half: WriteHalf,
 }
 
 /// Create a split `WebSocketRead`/`WebSocketWrite` pair from a stream that has already completed the WebSocket handshake.
-pub fn after_handshake_split<R, W>(
-    read: R,
-    write: W,
+pub fn after_handshake_split(
+    read: OwnedReadHalf,
+    write: OwnedWriteHalf,
     role: Role,
-) -> (WebSocketRead<R>, WebSocketWrite<W>)
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
+) -> (WebSocketRead, WebSocketWrite)
 {
     (
         WebSocketRead {
@@ -239,10 +238,10 @@ where
     )
 }
 
-impl<'f, S> WebSocketRead<S> {
+impl<'f> WebSocketRead {
     /// Consumes the `WebSocketRead` and returns the underlying stream.
     #[inline]
-    pub(crate) fn into_parts_internal(self) -> (S, ReadHalf) {
+    pub(crate) fn into_parts_internal(self) -> (OwnedReadHalf, ReadHalf) {
         (self.stream, self.read_half)
     }
 
@@ -276,7 +275,6 @@ impl<'f, S> WebSocketRead<S> {
         control_frame_handler: &mut impl FnMut(ControlFrame) -> R,
     ) -> Result<Message, WebSocketError>
     where
-        S: AsyncRead + Unpin,
         E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
         R: Future<Output=Result<(), E>>,
     {
@@ -296,7 +294,7 @@ impl<'f, S> WebSocketRead<S> {
     }
 }
 
-impl<'f, S> WebSocketWrite<S> { // TODO: Add a `write_vectored(&mut self, Vec<Bytes>)` method.
+impl<'f> WebSocketWrite { // TODO: Add a `write_vectored(&mut self, Vec<Bytes>)` method.
     /// Sets whether to use vectored writes. This option does not guarantee that vectored writes will be always used.
     ///
     /// Default: `true`
@@ -322,17 +320,15 @@ impl<'f, S> WebSocketWrite<S> { // TODO: Add a `write_vectored(&mut self, Vec<By
     pub async fn write_frame(
         &mut self,
         frame: Frame<'f>,
-    ) -> Result<(), WebSocketError>
-    where
-        S: AsyncWrite + Unpin,
-    {
+    ) -> Result<(), WebSocketError> {
         self.write_half.write_frame(&mut self.stream, frame).await
     }
 
-    pub async fn flush(&mut self) -> Result<(), WebSocketError>
-    where
-        S: AsyncWrite + Unpin,
-    {
+    pub async fn write_message(&mut self, message: MessageOut) -> Result<(), WebSocketError> {
+        self.write_half.write_message(&mut self.stream, message).await
+    }
+
+    pub async fn flush(&mut self) -> Result<(), WebSocketError> {
         flush(&mut self.stream).await
     }
 }
@@ -346,13 +342,13 @@ where
 }
 
 /// WebSocket protocol implementation over an async stream.
-pub struct WebSocket<S> {
-    stream: S,
+pub struct WebSocket {
+    stream: TcpStream,
     write_half: WriteHalf,
     read_half: ReadHalf,
 }
 
-impl<'f, S> WebSocket<S> {
+impl<'f> WebSocket {
     /// Creates a new `WebSocket` from a stream that has already completed the WebSocket handshake.
     ///
     /// Use the `upgrade` feature to handle server upgrades and client handshakes.
@@ -372,9 +368,7 @@ impl<'f, S> WebSocket<S> {
     ///   Ok(())
     /// }
     /// ```
-    pub fn after_handshake(stream: S, role: Role) -> Self
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
+    pub fn after_handshake(stream: TcpStream, role: Role) -> Self
     {
         Self {
             stream,
@@ -386,17 +380,12 @@ impl<'f, S> WebSocket<S> {
     /// Split a [`WebSocket`] into a [`WebSocketRead`] and [`WebSocketWrite`] half. Note that the split version does not
     /// handle fragmented packets and you may wish to create a [`FragmentCollectorRead`] over top of the read half that
     /// is returned.
-    pub fn split<R, W>(
-        self,
-        split_fn: impl Fn(S) -> (R, W),
-    ) -> (WebSocketRead<R>, WebSocketWrite<W>)
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-        R: AsyncRead + Unpin,
-        W: AsyncWrite + Unpin,
+    pub fn split(
+        self
+    ) -> (WebSocketRead, WebSocketWrite)
     {
         let (stream, read, write) = self.into_parts_internal();
-        let (r, w) = split_fn(stream);
+        let (r, w) = stream.into_split();
         (
             WebSocketRead {
                 stream: r,
@@ -411,14 +400,14 @@ impl<'f, S> WebSocket<S> {
 
     /// Consumes the `WebSocket` and returns the underlying stream.
     #[inline]
-    pub fn into_inner(self) -> S {
+    pub fn into_inner(self) -> TcpStream {
         // self.write_half.into_inner().stream
         self.stream
     }
 
     /// Consumes the `WebSocket` and returns the underlying stream.
     #[inline]
-    pub(crate) fn into_parts_internal(self) -> (S, ReadHalf, WriteHalf) {
+    pub(crate) fn into_parts_internal(self) -> (TcpStream, ReadHalf, WriteHalf) {
         (self.stream, self.read_half, self.write_half)
     }
 
@@ -678,34 +667,41 @@ impl WriteHalf {
 
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    pub async fn write_message(
+        &mut self,
+        stream: &mut OwnedWriteHalf,
+        mut message: MessageOut,
+    ) -> Result<(), WebSocketError>
+    {
+        if self.closed {
+            if message.is_close() {
+                return Ok(()); // Already sent close, this is a no-op
+            }
+            return Err(WebSocketError::ConnectionClosed);
+        }
+        if message.is_close() {
+            self.closed = true;
+        }
 
-    const _: () = {
-        const fn assert_unsync<S>() {
-            // Generic trait with a blanket impl over `()` for all types.
-            trait AmbiguousIfImpl<A> {
-                // Required for actually being able to reference the trait.
-                fn some_item() {}
+        if !message.is_fragmented() {
+            let mut frame = message.to_single_frame();
+            frame.writev(stream).await?;
+            Ok(())
+        } else {
+            let header = message.build_header_for_fragmented_message();
+            let slices = message.fragmented_to_slices(&header);
+
+            let full_len = slices.iter().map(|slice| slice.len()).sum::<usize>();
+            let sent_bytes = stream.write_vectored(&slices).await?;
+            if sent_bytes != full_len {
+                return Err(WebSocketError::SendError(format!(
+                    "Failed to send all bytes of fragmented message: sent {} of {}",
+                    sent_bytes, full_len
+                ).into()));
             }
 
-            impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-
-            // Used for the specialized impl when *all* traits in
-            // `$($t)+` are implemented.
-            #[allow(dead_code)]
-            struct Invalid;
-
-            impl<T: ?Sized + Sync> AmbiguousIfImpl<Invalid> for T {}
-
-            // If there is only one specialized trait impl, type inference with
-            // `_` can be resolved and this can compile. Fails to compile if
-            // `$x` implements `AmbiguousIfImpl<Invalid>`.
-            let _ = <S as AmbiguousIfImpl<_>>::some_item;
+            Ok(())
         }
-        assert_unsync::<WebSocket<tokio::net::TcpStream>>();
-    };
+    }
 }
