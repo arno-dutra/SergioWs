@@ -1,11 +1,11 @@
-use crate::{CloseCode, Frame, Payload};
+use crate::{Frame, Payload};
 use bytes::Bytes;
 use std::io::IoSlice;
 
 pub enum MessageOut {
     Ping(Vec<u8>),
     Pong(Vec<u8>),
-    Close(CloseCode, Option<String>),
+    Close(Vec<u8>),
     Text(String),
     Binary(Vec<u8>),
     FragmentedBinary(Vec<Bytes>),
@@ -13,7 +13,7 @@ pub enum MessageOut {
 
 impl MessageOut {
     pub fn is_close(&self) -> bool {
-        matches!(self, MessageOut::Close(_, _))
+        matches!(self, MessageOut::Close(_))
     }
 
     pub fn is_fragmented(&self) -> bool {
@@ -24,7 +24,7 @@ impl MessageOut {
         match self {
             MessageOut::Ping(payload) => Frame::ping(Payload::Owned(payload)),
             MessageOut::Pong(payload) => Frame::pong(Payload::Owned(payload)),
-            MessageOut::Close(code, reason) => Frame::close(u16::from(code), reason.unwrap_or(String::new()).as_ref()),
+            MessageOut::Close(payload) => Frame::close_raw(Payload::Owned(payload)),
             MessageOut::Text(text) => Frame::text(Payload::Owned(text.into_bytes())),
             MessageOut::Binary(data) => Frame::binary(Payload::Owned(data)),
             MessageOut::FragmentedBinary(_) => panic!("Cannot convert fragmented binary message to a single frame"),
