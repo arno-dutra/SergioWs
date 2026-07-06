@@ -89,18 +89,18 @@ where
     B::Data: Send,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await.map_err(|e| WebSocketError::HandshakeFailed(e.to_string()))?;
     let fut = Box::pin(async move {
         let _ = conn.with_upgrades().await;
     });
     executor.execute(fut);
 
-    let mut response = sender.send_request(request).await?;
+    let mut response = sender.send_request(request).await.map_err(|e| WebSocketError::HandshakeFailed(e.to_string()))?;
     verify(&response)?;
 
     match hyper::upgrade::on(&mut response).await {
         Ok(upgraded) => Ok(upgraded),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(WebSocketError::HandshakeFailed(e.to_string())),
     }
 }
 

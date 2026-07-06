@@ -34,6 +34,8 @@ pub enum WebSocketError {
   InvalidSecWebsocketVersion,
   #[error("Invalid value")]
   InvalidValue,
+  #[error("Handshake failed: {0}")]
+  HandshakeFailed(String),
   #[error("Sec-WebSocket-Key header is missing")]
   MissingSecWebSocketKey,
   #[error(transparent)]

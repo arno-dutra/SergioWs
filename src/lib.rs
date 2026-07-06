@@ -153,14 +153,8 @@
 mod close;
 mod error;
 mod frame;
-/// Client handshake.
-#[cfg(feature = "upgrade")]
-#[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod handshake;
 mod mask;
-/// HTTP upgrades.
-#[cfg(feature = "upgrade")]
-#[cfg_attr(docsrs, doc(cfg(feature = "upgrade")))]
 pub mod upgrade;
 pub mod message_in;
 pub mod controle_frame;
@@ -181,10 +175,10 @@ use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use std::future::Future;
 use std::io::Cursor;
+use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
-use tokio::io::{AsyncRead};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 

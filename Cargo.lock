@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "sergio_ws"
-version = "0.10.4"
+version = "0.10.6"
 dependencies = [
  "anyhow",
  "assert2",
