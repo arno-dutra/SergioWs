@@ -37,17 +37,19 @@ impl MessageOut {
                 let mut header = Vec::with_capacity(10);
                 let total_length: usize = fragments.iter().map(|f| f.len()).sum();
 
-                header[0] = 0b1000_0000;
-                header[0] |= 0b0000_0010; // Opcode: Binary
+                header.push(
+                    0b1000_0000 
+                    | 0b0000_0010 // Opcode: Binary
+                );
 
                 if total_length < 126 {
-                    header[1] = total_length as u8;
+                    header.push(total_length as u8);
                 } else if total_length < 65536 {
-                    header[1] = 126;
-                    header[2..4].copy_from_slice(&(total_length as u16).to_be_bytes());
+                    header.push(126);
+                    header.extend_from_slice(&(total_length as u16).to_be_bytes());
                 } else {
-                    header[1] = 127;
-                    header[2..10].copy_from_slice(&(total_length as u64).to_be_bytes());
+                    header.push(127);
+                    header.extend_from_slice(&(total_length as u64).to_be_bytes());
                 }
                 header
             }
