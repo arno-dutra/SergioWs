@@ -28,14 +28,12 @@ use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper::Request;
 use hyper::Response;
-use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
 use sha1::Digest;
 use sha1::Sha1;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
-use tokio::net::TcpStream;
 
 fn sec_websocket_protocol(key: &[u8]) -> String {
     let mut sha1 = Sha1::new();
@@ -227,13 +225,8 @@ impl std::future::Future for UpgradeFut {
             Poll::Ready(x) => x,
         };
 
-        // Downcast the upgraded connection to TokioIo<TcpStream>
-        let upgraded = match upgraded.unwrap().downcast::<TokioIo<TcpStream>>() {
-          Ok(tokio_io) => tokio_io.io.into_inner(),
-          Err(_) => unreachable!("Upgraded is not downcastable to TokioIo<TcpStream>. The issue comes from the implementaiton of the SergioWs::handshake::client function."),
-        };
         Poll::Ready(Ok(WebSocket::after_handshake(
-            upgraded,
+            upgraded.unwrap(),
             Role::Server,
         )))
     }

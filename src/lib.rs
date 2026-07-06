@@ -166,7 +166,7 @@ pub mod message_in;
 pub mod controle_frame;
 pub mod message_out;
 
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 
 pub use crate::close::CloseCode;
 use crate::controle_frame::ControlFrame;
@@ -177,12 +177,14 @@ pub use crate::frame::Payload;
 pub use crate::mask::unmask;
 use crate::message_in::{Message, MessageBuffer};
 use crate::message_out::MessageOut;
-use bytes::BytesMut;
+use hyper::upgrade::Upgraded;
+use hyper_util::rt::TokioIo;
 use std::future::Future;
-use tokio::io::AsyncRead;
+use std::io::Cursor;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 
@@ -206,7 +208,7 @@ pub(crate) struct ReadHalf {
     auto_apply_mask: bool,
     writev_threshold: usize,
     max_message_size: usize,
-    buffer: BytesMut,
+    initial_buffer: Bytes,
 }
 
 pub struct WebSocketRead {
@@ -217,25 +219,6 @@ pub struct WebSocketRead {
 pub struct WebSocketWrite {
     stream: OwnedWriteHalf,
     write_half: WriteHalf,
-}
-
-/// Create a split `WebSocketRead`/`WebSocketWrite` pair from a stream that has already completed the WebSocket handshake.
-pub fn after_handshake_split(
-    read: OwnedReadHalf,
-    write: OwnedWriteHalf,
-    role: Role,
-) -> (WebSocketRead, WebSocketWrite)
-{
-    (
-        WebSocketRead {
-            stream: read,
-            read_half: ReadHalf::after_handshake(role),
-        },
-        WebSocketWrite {
-            stream: write,
-            write_half: WriteHalf::after_handshake(role),
-        },
-    )
 }
 
 impl<'f> WebSocketRead {
@@ -368,12 +351,18 @@ impl<'f> WebSocket {
     ///   Ok(())
     /// }
     /// ```
-    pub fn after_handshake(stream: TcpStream, role: Role) -> Self
+    pub fn after_handshake(stream: Upgraded, role: Role) -> Self
     {
+        // Downcast the upgraded connection to TokioIo<TcpStream>
+        let parts = match stream.downcast::<TokioIo<TcpStream>>() {
+            Ok(parts) => parts,
+            Err(_) => unreachable!("Upgraded is not downcastable to TokioIo<TcpStream>. The issue comes from the implementaiton of the SergioWs::handshake::client function."),
+        };
+
         Self {
-            stream,
+            stream: parts.io.into_inner(),
             write_half: WriteHalf::after_handshake(role),
-            read_half: ReadHalf::after_handshake(role),
+            read_half: ReadHalf::after_handshake(role, parts.read_buf.into()),
         }
     }
 
@@ -446,15 +435,13 @@ impl<'f> WebSocket {
 const MAX_HEADER_SIZE: usize = 14;
 
 impl ReadHalf {
-    pub fn after_handshake(role: Role) -> Self {
-        let buffer = BytesMut::with_capacity(8192);
-
+    pub fn after_handshake(role: Role, initial_buffer: Bytes) -> Self {
         Self {
             role,
             auto_apply_mask: true,
             writev_threshold: 1024,
             max_message_size: 64 << 20,
-            buffer,
+            initial_buffer,
         }
     }
 
@@ -472,7 +459,8 @@ impl ReadHalf {
     where
         S: AsyncRead + Unpin,
     {
-        let mut frame = match self.parse_frame_header(stream, message_buffer).await {
+        let mut full_stream = AsyncReadExt::chain(Cursor::new(self.initial_buffer.clone()), stream);
+        let mut frame = match self.parse_frame_header(&mut full_stream, message_buffer).await {
             Ok(frame) => frame,
             Err(e) => return (Err(e), None),
         };
@@ -483,8 +471,7 @@ impl ReadHalf {
 
         match frame.opcode {
             OpCode::Close => {
-                let obligated_send = ControlFrame::Close(frame.payload.extract_owned());
-                (Ok(false), Some(obligated_send))
+                (Ok(false), Some(ControlFrame::Close(frame.payload.extract_owned())))
             }
             OpCode::Ping => {
                 (Ok(false), Some(ControlFrame::Ping(frame.payload.extract_owned())))

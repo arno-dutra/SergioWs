@@ -25,6 +25,7 @@ use hyper_util::rt::TokioIo;
 use crate::WebSocketError;
 use std::future::Future;
 use std::pin::Pin;
+use hyper::upgrade::Upgraded;
 use tokio::net::TcpStream;
 
 /// Perform the client handshake.
@@ -81,7 +82,7 @@ pub async fn client<E, B>(
     executor: &E,
     request: Request<B>,
     socket: TcpStream,
-) -> Result<TcpStream, WebSocketError>
+) -> Result<Upgraded, WebSocketError>
 where
     E: hyper::rt::Executor<Pin<Box<dyn Future<Output=()> + Send>>>,
     B: hyper::body::Body + 'static + Send,
@@ -98,13 +99,7 @@ where
     verify(&response)?;
 
     match hyper::upgrade::on(&mut response).await {
-        Ok(upgraded) => {
-            // Downcast the upgraded connection to TokioIo<TcpStream>
-            match upgraded.downcast::<TokioIo<TcpStream>>() {
-                Ok(tokio_io) => Ok(tokio_io.io.into_inner()),
-                Err(_) => unreachable!("Upgraded is not downcastable to TokioIo<TcpStream>. The issue comes from the implementaiton of the SergioWs::handshake::client function."),
-            }
-        }
+        Ok(upgraded) => Ok(upgraded),
         Err(e) => Err(e.into()),
     }
 }

@@ -21,13 +21,12 @@ use hyper::service::service_fn;
 use hyper::Request;
 use hyper::Response;
 use hyper_util::rt::TokioIo;
-use sergio_ws::Frame;
 use sergio_ws::{upgrade, Payload};
+use sergio_ws::{Frame, WebSocket};
 use tokio::net::TcpListener;
 
 use hyper::header::CONNECTION;
 use hyper::header::UPGRADE;
-use hyper::upgrade::Upgraded;
 use sergio_ws::handshake;
 use sergio_ws::WebSocketRead;
 use sergio_ws::WebSocketWrite;
@@ -37,7 +36,8 @@ use std::future::Future;
 use std::rc::Rc;
 
 use sergio_ws::controle_frame::ControlFrame;
-use sergio_ws::message::Message;
+use sergio_ws::message_in::Message;
+use sergio_ws::message_out::MessageOut;
 use tokio::net::TcpStream;
 
 const N_CLIENTS: usize = 20;
@@ -48,9 +48,9 @@ async fn handle_client(
 ) -> Result<()> {
     let mut ws = fut.await?;
     ws.set_writev(false);
-    let (reader, mut writer) = ws.split(tokio::io::split);
+    let (reader, mut writer) = ws.split();
 
-    writer.write_frame(Frame::binary(client_id.to_ne_bytes().as_ref().into()))
+    writer.write_message(MessageOut::Binary(client_id.to_ne_bytes().as_ref().into()))
         .await
         .unwrap();
 
@@ -80,8 +80,8 @@ async fn server_upgrade(
 async fn connect(
     client_id: usize,
 ) -> Result<(
-    WebSocketRead<tokio::io::ReadHalf<TokioIo<Upgraded>>>,
-    WebSocketWrite<tokio::io::WriteHalf<TokioIo<Upgraded>>>,
+    WebSocketRead,
+    WebSocketWrite,
 )> {
     let stream = TcpStream::connect("localhost:8080").await?;
 
@@ -99,12 +99,13 @@ async fn connect(
         .header("Sec-WebSocket-Version", "13")
         .body(Empty::<Bytes>::new())?;
 
-    let (ws, _) = handshake::client(&SpawnExecutor, req, stream).await?;
-    Ok(ws.split(tokio::io::split))
+    let tcp_stream = handshake::client(&SpawnExecutor, req, stream).await?;
+    let ws = WebSocket::after_handshake(tcp_stream, sergio_ws::Role::Client);
+    Ok(ws.split())
 }
 
 async fn start_client(client_id: usize) -> Result<()> {
-    let (mut r, w) = connect(client_id).await.unwrap();
+    let (mut r, w) = connect(client_id).await?;
     let w = Rc::new(Mutex::new(w));
     let message = r
         .read_message(&mut move |frame| {

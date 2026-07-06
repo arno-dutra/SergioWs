@@ -1,22 +1,22 @@
 [package]
 name = "sergio_ws"
 description = "A fast RFC6455 WebSocket implementation"
-version = "0.10.4"
+version = "0.10.5"
 authors = ["Arno Dutra <arno.dutra@centrale-med.fr>", "Divy Srivastava <dj.srivastava23@gmail.com>"]
 license = "Apache-2.0"
 edition = "2021"
 repository = "https://github.com/arno-dutra/SergioWs"
 
 [dependencies]
-tokio = { version = "1.25.0", default-features = false, features = ["io-util", "net"] }
+tokio = { version = "1.52.3", features = ["full"] }
 simdutf8 = { version = "0.1.5", optional = true }
-hyper-util = { version = "0.1.0", features = ["tokio"], optional = true }
+hyper-util = { version = "0.1.0", features = ["tokio"] }
 http-body-util = { version = "0.1.0", optional = true }
 hyper = { version = "1", features = [
     "http1",
     "server",
     "client",
-], optional = true }
+] }
 pin-project = { version = "1.0.8", optional = true }
 base64 = { version = "0.22.0", optional = true }
 sha1 = { version = "0.10.5", optional = true }
@@ -32,14 +32,6 @@ async-trait = { version = "0.1", optional = true }
 
 [features]
 default = ["simd"]
-upgrade = [
-    "hyper",
-    "pin-project",
-    "base64",
-    "sha1",
-    "hyper-util",
-    "http-body-util",
-]
 simd = ["simdutf8"]
 # Axum integration
 with_axum = ["axum-core", "http", "async-trait"]
