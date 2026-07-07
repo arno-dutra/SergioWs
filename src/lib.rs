@@ -454,8 +454,13 @@ impl ReadHalf {
         S: AsyncRead + Unpin,
     {
         let initial_buffer = self.initial_buffer.take().unwrap_or_default();
-        let mut full_stream = AsyncReadExt::chain(Cursor::new(initial_buffer), stream);
-        let mut frame = match self.parse_frame_header(&mut full_stream, message_buffer).await {
+        let f = if initial_buffer.len() == 0 {
+            self.parse_frame_header(stream, message_buffer).await
+        } else {
+            let mut full_stream = AsyncReadExt::chain(Cursor::new(initial_buffer), stream);
+            self.parse_frame_header(&mut full_stream, message_buffer).await
+        };
+        let mut frame = match f {
             Ok(frame) => frame,
             Err(e) => return (Err(e), None),
         };
