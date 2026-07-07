@@ -1,7 +1,7 @@
 [package]
 name = "sergio_ws"
 description = "A fast RFC6455 WebSocket implementation"
-version = "0.10.6"
+version = "0.10.7"
 authors = ["Arno Dutra <arno.dutra@centrale-med.fr>", "Divy Srivastava <dj.srivastava23@gmail.com>"]
 license = "Apache-2.0"
 edition = "2021"
@@ -64,5 +64,13 @@ codegen-units = 1
 features = ["upgrade", "with_axum"]
 
 [[test]]
-name = "setup"
-path = "tests/setup.rs"
+name = "server_send_binary"
+path = "tests/server_send_binary.rs"
+
+[[test]]
+name = "server_echo_binary"
+path = "tests/server_echo_binary.rs"
+
+[[test]]
+name = "server_echo_fragmented_binary"
+path = "tests/server_echo_fragmented_binary.rs"

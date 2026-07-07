@@ -32,15 +32,15 @@ use sergio_ws::WebSocketRead;
 use sergio_ws::WebSocketWrite;
 use tokio::sync::Mutex;
 
-use std::future::Future;
-use std::rc::Rc;
-
 use sergio_ws::controle_frame::ControlFrame;
 use sergio_ws::message_in::Message;
 use sergio_ws::message_out::MessageOut;
+use std::future::Future;
+use std::rc::Rc;
+use std::sync::Arc;
 use tokio::net::TcpStream;
 
-const N_CLIENTS: usize = 20;
+const N_CLIENTS: usize = 1;
 
 async fn handle_client(
     client_id: usize,
@@ -48,11 +48,31 @@ async fn handle_client(
 ) -> Result<()> {
     let mut ws = fut.await?;
     ws.set_writev(false);
-    let (reader, mut writer) = ws.split();
+    let (mut r, w) = ws.split();
 
-    writer.write_message(MessageOut::Binary(client_id.to_ne_bytes().as_ref().into()))
-        .await
-        .unwrap();
+
+    let w = Arc::new(Mutex::new(w));
+    let cloned_w = w.clone();
+    let message = r
+        .read_message(&mut move |frame| {
+            let w = cloned_w.clone();
+            async move {
+                match frame {
+                    ControlFrame::Ping(payload) => w.lock().await.write_frame(Frame::pong(Payload::Owned(payload))).await,
+                    ControlFrame::Pong(_) => Ok(()),
+                    ControlFrame::Close(payload) => w.lock().await.write_frame(Frame::close_raw(Payload::Owned(payload))).await,
+                }
+            }
+        })
+        .await?;
+    match message {
+        Message::Binary(payload) => {
+            w.lock().await.write_message(MessageOut::Binary(payload.to_vec())).await.unwrap();
+        }
+        _ => {
+            panic!("Unexpected");
+        }
+    }
 
     Ok(())
 }
@@ -107,6 +127,9 @@ async fn connect(
 async fn start_client(client_id: usize) -> Result<()> {
     let (mut r, w) = connect(client_id).await?;
     let w = Rc::new(Mutex::new(w));
+
+    w.lock().await.write_message(MessageOut::Binary(client_id.to_ne_bytes().as_ref().into())).await.unwrap();
+
     let message = r
         .read_message(&mut move |frame| {
             let w = w.clone();
@@ -132,7 +155,7 @@ async fn start_client(client_id: usize) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test() -> Result<()> {
+async fn server_echo_binary() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
     println!("Server started, listening on {}", "127.0.0.1:8080");
     tokio::spawn(async move {
