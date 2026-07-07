@@ -202,7 +202,7 @@ pub(crate) struct ReadHalf {
     auto_apply_mask: bool,
     writev_threshold: usize,
     max_message_size: usize,
-    initial_buffer: Bytes,
+    initial_buffer: Option<Bytes>,
 }
 
 pub struct WebSocketRead {
@@ -435,7 +435,7 @@ impl ReadHalf {
             auto_apply_mask: true,
             writev_threshold: 1024,
             max_message_size: 64 << 20,
-            initial_buffer,
+            initial_buffer: Some(initial_buffer),
         }
     }
 
@@ -453,7 +453,8 @@ impl ReadHalf {
     where
         S: AsyncRead + Unpin,
     {
-        let mut full_stream = AsyncReadExt::chain(Cursor::new(self.initial_buffer.clone()), stream);
+        let initial_buffer = self.initial_buffer.take().unwrap_or_default();
+        let mut full_stream = AsyncReadExt::chain(Cursor::new(initial_buffer), stream);
         let mut frame = match self.parse_frame_header(&mut full_stream, message_buffer).await {
             Ok(frame) => frame,
             Err(e) => return (Err(e), None),
