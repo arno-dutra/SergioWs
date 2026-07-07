@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use hyper::body::Incoming;
+use hyper::upgrade::Upgraded;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
@@ -22,10 +23,10 @@ use base64::Engine;
 
 use hyper_util::rt::TokioIo;
 
-use crate::WebSocketError;
 use std::future::Future;
 use std::pin::Pin;
-use hyper::upgrade::Upgraded;
+
+use crate::WebSocketError;
 use tokio::net::TcpStream;
 
 /// Perform the client handshake.
@@ -89,7 +90,8 @@ where
     B::Data: Send,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(socket)).await.map_err(|e| WebSocketError::HandshakeFailed(e.to_string()))?;
+    let (mut sender, conn) =
+        hyper::client::conn::http1::handshake(TokioIo::new(socket)).await.map_err(|e| WebSocketError::HandshakeFailed(e.to_string()))?;
     let fut = Box::pin(async move {
         let _ = conn.with_upgrades().await;
     });

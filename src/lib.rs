@@ -300,13 +300,12 @@ impl<'f> WebSocketWrite { // TODO: Add a `write_vectored(&mut self, Vec<Bytes>)`
     ) -> Result<(), WebSocketError> {
         self.write_half.write_frame(&mut self.stream, frame).await
     }
+    pub async fn flush(&mut self) -> Result<(), WebSocketError> {
+        flush(&mut self.stream).await
+    }
 
     pub async fn write_message(&mut self, message: MessageOut) -> Result<(), WebSocketError> {
         self.write_half.write_message(&mut self.stream, message).await
-    }
-
-    pub async fn flush(&mut self) -> Result<(), WebSocketError> {
-        flush(&mut self.stream).await
     }
 }
 
@@ -356,7 +355,7 @@ impl<'f> WebSocket {
         Self {
             stream: parts.io.into_inner(),
             write_half: WriteHalf::after_handshake(role),
-            read_half: ReadHalf::after_handshake(role, parts.read_buf.into()),
+            read_half: ReadHalf::after_handshake(role, parts.read_buf),
         }
     }
 
@@ -471,7 +470,8 @@ impl ReadHalf {
 
         match frame.opcode {
             OpCode::Close => {
-                (Ok(false), Some(ControlFrame::Close(frame.payload.extract_owned())))
+                let obligated_send = ControlFrame::Close(frame.payload.extract_owned());
+                (Ok(false), Some(obligated_send))
             }
             OpCode::Ping => {
                 (Ok(false), Some(ControlFrame::Ping(frame.payload.extract_owned())))
@@ -692,3 +692,6 @@ impl WriteHalf {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {}

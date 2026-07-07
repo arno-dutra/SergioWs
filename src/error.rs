@@ -46,3 +46,9 @@ pub enum WebSocketError {
   #[error("Failed to send frame")]
   SendError(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
+
+impl From<hyper::Error> for WebSocketError {
+  fn from(err: hyper::Error) -> Self {
+    Self::HandshakeFailed(format!("{:?}", err).to_string())
+  }
+}
