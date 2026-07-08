@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bytes::{BufMut, Bytes};
+
 #[inline]
 fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
-  payload.iter_mut().enumerate().for_each(|(i, v)| {
-    *v ^= mask[i & 3];
-  });
+    payload.iter_mut().enumerate().for_each(|(i, v)| {
+        *v ^= mask[i & 3];
+    });
 }
 
 // TODO(@littledivy): Compiler does a good job at auto-vectorizing `unmask_fallback` with
@@ -102,71 +104,129 @@ fn unmask_easy(payload: &mut [u8], mask: [u8; 4]) {
 // https://godbolt.org/z/EPTYo5jK8
 #[inline]
 fn unmask_fallback(buf: &mut [u8], mask: [u8; 4]) {
-  let mask_u32 = u32::from_ne_bytes(mask);
+    let mask_u32 = u32::from_ne_bytes(mask);
 
-  let (prefix, words, suffix) = unsafe { buf.align_to_mut::<u32>() };
-  unmask_easy(prefix, mask);
-  let head = prefix.len() & 3;
-  let mask_u32 = if head > 0 {
-    if cfg!(target_endian = "big") {
-      mask_u32.rotate_left(8 * head as u32)
+    let (prefix, words, suffix) = unsafe { buf.align_to_mut::<u32>() };
+    unmask_easy(prefix, mask);
+    let head = prefix.len() & 3;
+    let mask_u32 = if head > 0 {
+        if cfg!(target_endian = "big") {
+            mask_u32.rotate_left(8 * head as u32)
+        } else {
+            mask_u32.rotate_right(8 * head as u32)
+        }
     } else {
-      mask_u32.rotate_right(8 * head as u32)
+        mask_u32
+    };
+    for word in words.iter_mut() {
+        *word ^= mask_u32;
     }
-  } else {
-    mask_u32
-  };
-  for word in words.iter_mut() {
-    *word ^= mask_u32;
-  }
-  unmask_easy(suffix, mask_u32.to_ne_bytes());
+    unmask_easy(suffix, mask_u32.to_ne_bytes());
 }
 
 /// Unmask a payload using the given 4-byte mask.
 #[inline]
 pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
-  unmask_fallback(payload, mask)
+    unmask_fallback(payload, mask)
+}
+
+#[inline]
+pub fn mask_inplace(buf: &mut [u8], mask: [u8; 4]) {
+    unmask_fallback(buf, mask);
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+    use super::*;
 
-  #[test]
-  fn test_unmask() {
-    let mut payload = [0u8; 33];
-    let mask = [1, 2, 3, 4];
-    unmask(&mut payload, mask);
-    assert_eq!(
-      &payload,
-      &[
-        1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4,
-        1, 2, 3, 4, 1, 2, 3, 4, 1
-      ]
-    );
-  }
-
-  #[test]
-  fn length_variation_unmask() {
-    for len in &[0, 2, 3, 8, 16, 18, 31, 32, 40] {
-      let mut payload = vec![0u8; *len];
-      let mask = [1, 2, 3, 4];
-      unmask(&mut payload, mask);
-
-      let expected = (0..*len).map(|i| (i & 3) as u8 + 1).collect::<Vec<_>>();
-      assert_eq!(payload, expected);
+    #[test]
+    fn test_unmask() {
+        let mut payload = [0u8; 33];
+        let mask = [1, 2, 3, 4];
+        unmask(&mut payload, mask);
+        assert_eq!(
+            &payload,
+            &[
+                1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4,
+                1, 2, 3, 4, 1, 2, 3, 4, 1
+            ]
+        );
     }
-  }
 
-  #[test]
-  fn length_variation_unmask_2() {
-    for len in &[0, 2, 3, 8, 16, 18, 31, 32, 40] {
-      let mut payload = vec![0u8; *len];
-      let mask = rand::random::<[u8; 4]>();
-      unmask(&mut payload, mask);
+    #[test]
+    fn length_variation_unmask() {
+        for len in &[0, 2, 3, 8, 16, 18, 31, 32, 40] {
+            let mut payload = vec![0u8; *len];
+            let mask = [1, 2, 3, 4];
+            unmask(&mut payload, mask);
 
-      let expected = (0..*len).map(|i| mask[i & 3]).collect::<Vec<_>>();
-      assert_eq!(payload, expected);
+            let expected = (0..*len).map(|i| (i & 3) as u8 + 1).collect::<Vec<_>>();
+            assert_eq!(payload, expected);
+        }
     }
-  }
+
+    #[test]
+    fn length_variation_unmask_2() {
+        for len in &[0, 2, 3, 8, 16, 18, 31, 32, 40] {
+            let mut payload = vec![0u8; *len];
+            let mask = rand::random::<[u8; 4]>();
+            unmask(&mut payload, mask);
+
+            let expected = (0..*len).map(|i| mask[i & 3]).collect::<Vec<_>>();
+            assert_eq!(payload, expected);
+        }
+    }
+
+    // Vec ===================================================================================
+
+    #[test]
+    fn test_unmask_vec() {
+        let origin_payload = [0u8; 33];
+        let mask = [1, 2, 3, 4];
+        let mut payload = Vec::with_capacity(33);
+        mask_to(&origin_payload, mask, &mut payload);
+        assert_eq!(
+            &payload,
+            &[
+                1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4,
+                1, 2, 3, 4, 1, 2, 3, 4, 1
+            ]
+        );
+    }
+}
+
+#[inline]
+fn unmask_easy_to(payload: &[u8], mask: [u8; 4], output: &mut Vec<u8>) {
+    output.extend(payload.iter().enumerate().map(|(i, &v)| v ^ mask[i & 3]));
+}
+
+#[inline]
+fn mask_to(buf: &[u8], mask: [u8; 4], output: &mut Vec<u8>) {
+    let mask_u32 = u32::from_ne_bytes(mask);
+    let (prefix, words, suffix) = unsafe { buf.align_to::<u32>() };
+    unmask_easy_to(prefix, mask, output);
+    let head = prefix.len() & 3;
+    let mask_u32 = if head > 0 {
+        if cfg!(target_endian = "big") {
+            mask_u32.rotate_left(8 * head as u32)
+        } else {
+            mask_u32.rotate_right(8 * head as u32)
+        }
+    } else {
+        mask_u32
+    };
+    for word in words.iter() {
+        output.extend_from_slice(&(*word ^ mask_u32).to_ne_bytes());
+    }
+    unmask_easy_to(suffix, mask_u32.to_ne_bytes(), output);
+}
+
+pub(crate) fn mask_vec(buf: &Vec<Bytes>, mut mask: [u8; 4]) -> Vec<u8> {
+    let total_len = buf.iter().map(|b| b.len()).sum::<usize>();
+    let mut output = Vec::with_capacity(total_len);
+    for b in buf {
+        mask_to(&b, mask, &mut output);
+        mask.rotate_left(b.len() & 3);
+    }
+    output
 }

@@ -671,13 +671,16 @@ impl WriteHalf {
             self.closed = true;
         }
 
+        let mask: Option<[u8; 4]> = if self.role == Role::Client { Some(rand::random()) } else { None };
+
         if !message.is_fragmented() {
-            let mut frame = message.to_single_frame();
+            let mut frame = message.to_single_frame(mask);
             frame.writev(stream).await?;
             Ok(())
         } else {
-            let header = message.build_header_for_fragmented_message();
-            let slices = message.fragmented_to_slices(&header);
+            let header = message.build_header_for_fragmented_message(&mask);
+            let masked_message = message.apply_mask(mask);
+            let slices = masked_message.fragmented_to_slices(&header);
 
             let full_len = slices.iter().map(|slice| slice.len()).sum::<usize>();
             let sent_bytes = stream.write_vectored(&slices).await?;
